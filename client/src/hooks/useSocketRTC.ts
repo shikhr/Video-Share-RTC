@@ -193,10 +193,12 @@ const UseSocketRTC = (roomName: string) => {
       }
     });
   };
+
   const toggleMic = () => {
     toggleMedia('audio', micActive);
     setMicActive(!micActive);
   };
+
   const toggleCamera = () => {
     toggleMedia('video', cameraActive);
     setCameraActive(!cameraActive);
