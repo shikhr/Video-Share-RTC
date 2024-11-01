@@ -28,9 +28,10 @@ const server = http.createServer(app, {
   },
 });
 const io = new Server(server);
+const port = process.env.PORT || 4000;
 
 io.on('connection', (socket) => {
-  console.log(`User Connected :${socket.id}`);
+  // console.log(`User Connected :${socket.id}`);
 
   socket.on('join', (roomName) => {
     const { rooms } = io.sockets.adapter;
@@ -46,16 +47,16 @@ io.on('connection', (socket) => {
     } else {
       socket.emit('full', roomName);
     }
-    console.log('rooms', rooms);
+    // console.log('rooms', rooms);
   });
 
   socket.on('ready', (roomName) => {
-    console.log('ready');
+    // console.log('ready');
     socket.broadcast.to(roomName).emit('ready');
   });
 
   socket.on('offer', (offer, roomName) => {
-    console.log('offer');
+    // console.log('offer');
     socket.broadcast.to(roomName).emit('offer', offer);
   });
 
@@ -64,7 +65,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('ice-candidate', (candidate, roomName) => {
-    console.log('candidate', candidate);
+    // console.log('candidate', candidate);
     socket.broadcast.to(roomName).emit('ice-candidate', candidate);
   });
 
@@ -74,7 +75,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', (socket) => {
-    console.log('Disconnected');
+    // console.log('Disconnected');
   });
 });
 
@@ -82,6 +83,6 @@ app.get('*', (req, res) => {
   res.sendFile('index.html', { root: path.join(__dirname, './client/dist') });
 });
 
-server.listen(5000, () => {
-  console.log('Server is running on http://localhost:5000');
+server.listen(port, () => {
+  // console.log('Server is running on http://localhost:5000');
 });
