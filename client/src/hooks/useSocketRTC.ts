@@ -4,10 +4,7 @@ import { Socket, io } from 'socket.io-client';
 import { useNavigate } from '@tanstack/react-router';
 
 const UseSocketRTC = (roomName: string) => {
-  const navigate = useNavigate({
-    from: '/room/$room',
-    params: { room: roomName },
-  });
+  const navigate = useNavigate();
 
   const [micActive, setMicActive] = useState(true);
   const [cameraActive, setCameraActive] = useState(true);

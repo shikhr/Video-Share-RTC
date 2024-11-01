@@ -5,9 +5,17 @@ import dotenv from 'dotenv';
 dotenv.config();
 import http from 'http';
 import { Server } from 'socket.io';
+import path, { dirname } from 'path';
+import { fileURLToPath } from 'url';
 
 const app = express();
-1;
+
+const __dirname = dirname(fileURLToPath(new URL('../', import.meta.url)));
+
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static(path.resolve(__dirname, './client/dist')));
+
 app.use(
   cors({
     origin: ['http://localhost:5173'],
@@ -20,10 +28,6 @@ const server = http.createServer(app, {
   },
 });
 const io = new Server(server);
-
-app.get('/', (req, res) => {
-  res.send('Server is ready');
-});
 
 io.on('connection', (socket) => {
   console.log(`User Connected :${socket.id}`);
@@ -72,6 +76,10 @@ io.on('connection', (socket) => {
   socket.on('disconnect', (socket) => {
     console.log('Disconnected');
   });
+});
+
+app.get('*', (req, res) => {
+  res.sendFile('index.html', { root: path.join(__dirname, './client/dist') });
 });
 
 server.listen(5000, () => {
