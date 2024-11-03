@@ -3,22 +3,38 @@ import { configuration } from '../utils/RTCConfig';
 import { Socket, io } from 'socket.io-client';
 import { useNavigate } from '@tanstack/react-router';
 
+interface PeerConnection {
+  id: string;
+  connection: RTCPeerConnection;
+  videoRef: React.RefObject<HTMLVideoElement>;
+}
+
 const UseSocketRTC = (roomName: string) => {
   const navigate = useNavigate();
 
   const [micActive, setMicActive] = useState(true);
   const [cameraActive, setCameraActive] = useState(true);
+  const [peers, setPeers] = useState<PeerConnection[]>([]);
 
   const socketRef = useRef<null | Socket>(null);
   const localStreamRef = useRef<null | MediaStream>(null);
   const localVideoRef = useRef<null | HTMLVideoElement>(null);
-  const remoteVideoRef = useRef<null | HTMLVideoElement>(null);
 
-  const RTCConnectionRef = useRef<null | RTCPeerConnection>(null);
+  const peersRef = useRef<Map<string, PeerConnection>>(new Map());
 
   const isHostRef = useRef(false);
 
   useEffect(() => {
+    navigator.permissions
+      .query({ name: 'camera' as PermissionName })
+      .then((permissionStatus) => {
+        console.log('Camera permission status:', permissionStatus.state);
+
+        permissionStatus.onchange = () => {
+          console.log('Camera permission changed:', permissionStatus.state);
+        };
+      });
+
     const initSocket = async () => {
       socketRef.current = io();
 
@@ -30,9 +46,9 @@ const UseSocketRTC = (roomName: string) => {
       socketRef.current.on('joined', handleRoomJoined);
       socketRef.current.on('created', handleRoomCreated);
       socketRef.current.on('full', handleRoomFull);
-      socketRef.current.on('ready', makeCall);
-      socketRef.current.on('leave', handlePeerLeave);
-
+      socketRef.current.on('peer-list', handlePeerList);
+      socketRef.current.on('peer-joined', handlePeerJoined);
+      socketRef.current.on('peer-left', handlePeerLeft);
       socketRef.current.on('offer', handleOffer);
       socketRef.current.on('answer', handleAnswer);
       socketRef.current.on('ice-candidate', handleCandidate);
@@ -40,41 +56,65 @@ const UseSocketRTC = (roomName: string) => {
 
     initSocket();
     return () => {
-      if (socketRef.current) {
-        socketRef.current.disconnect();
-      }
+      cleanupConnections();
+      socketRef.current?.disconnect();
     };
   }, [roomName]);
 
   const handleRoomCreated = async () => {
     isHostRef.current = true;
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: 500, height: 500 },
-      audio: true,
-    });
-    localStreamRef.current = stream;
-    if (localVideoRef.current) {
-      localVideoRef.current.srcObject = stream;
-      localVideoRef.current.onloadedmetadata = () => {
-        localVideoRef.current?.play();
-      };
-    }
+    await setupLocalStream();
+    console.log('created room:', roomName);
     socketRef.current?.emit('ready', roomName);
   };
 
   const handleRoomJoined = async () => {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: 500, height: 500 },
-      audio: true,
-    });
-    localStreamRef.current = stream;
-    if (localVideoRef.current) {
-      localVideoRef.current.srcObject = stream;
-      localVideoRef.current.onloadedmetadata = () => {
-        localVideoRef.current?.play();
-      };
+    console.log('joined room:', roomName);
+    await setupLocalStream();
+    if (localStreamRef.current) {
+      socketRef.current?.emit('ready', roomName);
+    } else {
+      console.error('Failed to get local stream');
     }
-    socketRef.current?.emit('ready', roomName);
+  };
+
+  const setupLocalStream = async () => {
+    if (localStreamRef.current) {
+      console.log('Local stream already exists');
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: 500, height: 500 },
+        audio: true,
+      });
+
+      localStreamRef.current = stream;
+
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = stream;
+        await new Promise((resolve) => {
+          if (localVideoRef.current) {
+            localVideoRef.current.onloadedmetadata = () => {
+              localVideoRef.current
+                ?.play()
+                .then(() => {
+                  resolve(true);
+                })
+                .catch((err) => {
+                  resolve(false);
+                });
+            };
+          }
+        });
+      }
+
+      return true;
+    } catch (err) {
+      console.error('Error accessing media devices:', err);
+      return false;
+    }
   };
 
   const handleRoomFull = () => {
@@ -82,104 +122,182 @@ const UseSocketRTC = (roomName: string) => {
     navigate({ to: '/', replace: true });
   };
 
-  const handlePeerLeave = () => {
-    isHostRef.current = true;
+  const handlePeerList = async (peerIds: string[]) => {
+    console.log('Peer list:', peerIds);
 
-    if (remoteVideoRef.current?.srcObject) {
-      const stream = remoteVideoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach((track) => track.stop());
-      remoteVideoRef.current.srcObject = null;
+    // First ensure we have local stream
+    if (!localStreamRef.current) {
+      await setupLocalStream();
     }
-    if (RTCConnectionRef.current) {
-      RTCConnectionRef.current.ontrack = null;
-      RTCConnectionRef.current.onicecandidate = null;
-      RTCConnectionRef.current.close();
-      RTCConnectionRef.current = null;
+
+    // Only proceed if we have the stream
+    if (localStreamRef.current) {
+      for (const peerId of peerIds) {
+        if (!peersRef.current.has(peerId)) {
+          await makeOffer(peerId);
+        }
+      }
+    } else {
+      console.error('Unable to establish local stream for peer connections');
     }
   };
 
-  const createPeerConnection = () => {
+  const handlePeerJoined = async (peerId: string) => {
+    console.log('Peer joined:', peerId);
+    if (!peersRef.current.has(peerId)) {
+      // await createPeerConnection(peerId);
+    }
+  };
+
+  const handlePeerLeft = (peerId: string) => {
+    const peerConnection = peersRef.current.get(peerId);
+    if (peerConnection) {
+      peerConnection.connection.close();
+      peerConnection.videoRef.current?.remove();
+      peersRef.current.delete(peerId);
+
+      setPeers(Array.from(peersRef.current.values()));
+    }
+  };
+
+  const createPeerConnection = async (peerId: string) => {
+    if (!localStreamRef.current) {
+      throw new Error('wee Cannot create peer connection without local stream');
+    }
+
+    console.log('Creating peer connection:', peerId);
+
+    const videoRef = { current: document.createElement('video') };
+    videoRef.current.autoplay = true;
+    videoRef.current.playsInline = true;
+
     const newPC = new RTCPeerConnection(configuration);
 
-    newPC.onicecandidate = ({ candidate }) => {
-      if (candidate) {
-        socketRef.current?.emit('ice-candidate', candidate, roomName);
+    // Handle ICE candidates
+    newPC.onicecandidate = (event) => {
+      if (event.candidate) {
+        socketRef.current?.emit(
+          'ice-candidate',
+          event.candidate,
+          roomName,
+          peerId
+        );
       }
     };
 
+    // Handle incoming tracks
     newPC.ontrack = (event) => {
-      if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = event.streams[0];
-        remoteVideoRef.current.onloadedmetadata = () => {
-          remoteVideoRef.current?.play();
+      if (event.streams && event.streams[0]) {
+        videoRef.current.srcObject = event.streams[0];
+        videoRef.current.onloadedmetadata = () => {
+          videoRef.current.play();
         };
+      } else {
+        console.warn('Received track but no streams for peer:', peerId);
       }
     };
 
-    return newPC;
+    // Add local tracks ONLY if we have them
+    if (localStreamRef.current) {
+      console.log('Adding local tracks to peer connection:', peerId);
+      localStreamRef.current.getTracks().forEach((track) => {
+        newPC.addTrack(track, localStreamRef.current!);
+      });
+    } else {
+      console.warn(
+        'No local stream when creating peer connection for:',
+        peerId
+      );
+    }
+
+    const peerConnection: PeerConnection = {
+      id: peerId,
+      connection: newPC,
+      videoRef,
+    };
+
+    return peerConnection;
   };
 
-  const makeCall = async () => {
-    if (!isHostRef.current) return;
-    RTCConnectionRef.current = createPeerConnection();
-
-    localStreamRef.current?.getTracks().forEach((track) => {
-      RTCConnectionRef.current?.addTrack(track, localStreamRef.current!);
-    });
+  const makeOffer = async (peerId: string) => {
+    const peerConnection = await createPeerConnection(peerId);
+    peersRef.current.set(peerId, peerConnection);
+    setPeers(Array.from(peersRef.current.values()));
 
     try {
-      const offer = await RTCConnectionRef.current?.createOffer();
-      await RTCConnectionRef.current?.setLocalDescription(offer);
-      socketRef.current?.emit('offer', offer, roomName);
+      const offer = await peerConnection.connection.createOffer();
+      await peerConnection.connection.setLocalDescription(offer);
+      console.log('Sending offer to:', peerId);
+      socketRef.current?.emit('offer', offer, roomName, peerId);
     } catch (err) {
       console.error('Error creating offer:', err);
     }
   };
 
-  const handleOffer = async (offer: RTCSessionDescriptionInit) => {
-    if (RTCConnectionRef.current) {
-      console.error('Existing peer connection');
+  const handleOffer = async (
+    offer: RTCSessionDescriptionInit,
+    senderId: string
+  ) => {
+    console.log('Received offer from:', senderId);
+
+    if (peersRef.current.has(senderId)) {
+      console.warn('Already have a connection for this peer');
       return;
     }
 
-    RTCConnectionRef.current = createPeerConnection();
-
-    localStreamRef.current?.getTracks().forEach((track) => {
-      RTCConnectionRef.current?.addTrack(track, localStreamRef.current!);
-    });
+    const peerConnection = await createPeerConnection(senderId);
+    peersRef.current.set(senderId, peerConnection);
+    setPeers(Array.from(peersRef.current.values()));
 
     try {
-      await RTCConnectionRef.current?.setRemoteDescription(offer);
-      const answer = await RTCConnectionRef.current?.createAnswer();
-      await RTCConnectionRef.current?.setLocalDescription(answer);
-      socketRef.current?.emit('answer', answer, roomName);
+      await peerConnection.connection.setRemoteDescription(
+        new RTCSessionDescription(offer)
+      );
+      const answer = await peerConnection.connection.createAnswer();
+      await peerConnection.connection.setLocalDescription(answer);
+      console.log('Sending answer to:', senderId);
+      socketRef.current?.emit('answer', answer, roomName, senderId);
     } catch (err) {
       console.error('Error handling offer:', err);
     }
   };
 
-  const handleAnswer = async (answer: RTCSessionDescriptionInit) => {
-    if (!RTCConnectionRef.current) {
-      console.error('No peer connection');
+  const handleAnswer = async (
+    answer: RTCSessionDescriptionInit,
+    senderId: string
+  ) => {
+    console.log('Received answer from:', senderId);
+    const peerConnection = peersRef.current.get(senderId)?.connection;
+
+    if (!peerConnection) {
+      console.error('No peer connection for:', senderId);
       return;
     }
 
     try {
-      await RTCConnectionRef.current.setRemoteDescription(answer);
+      await peerConnection.setRemoteDescription(
+        new RTCSessionDescription(answer)
+      );
     } catch (err) {
       console.error('Error handling answer:', err);
     }
   };
 
-  const handleCandidate = async (candidate: RTCIceCandidateInit) => {
-    if (!RTCConnectionRef.current) {
+  const handleCandidate = async (
+    candidate: RTCIceCandidateInit,
+    senderId: string
+  ) => {
+    const peerConnection = peersRef.current.get(senderId)?.connection;
+
+    if (!peerConnection) {
       console.error('No peer connection');
       return;
     }
+
     try {
-      await RTCConnectionRef.current.addIceCandidate(candidate);
+      await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
     } catch (err) {
-      console.error('Error handling candidate:', err);
+      console.error('Error adding ICE candidate:', err);
     }
   };
 
@@ -201,36 +319,36 @@ const UseSocketRTC = (roomName: string) => {
     setCameraActive(!cameraActive);
   };
 
-  const leaveRoom = () => {
-    console.log('Room left');
-    isHostRef.current = false;
-    socketRef.current?.emit('leave', roomName);
-    if (localVideoRef.current?.srcObject) {
-      const stream = localVideoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach((track) => track.stop());
-    }
-    if (remoteVideoRef.current?.srcObject) {
-      const stream = remoteVideoRef.current.srcObject as MediaStream;
-      stream.getTracks().forEach((track) => track.stop());
-    }
-    if (RTCConnectionRef.current) {
-      RTCConnectionRef.current.ontrack = null;
-      RTCConnectionRef.current.onicecandidate = null;
-      RTCConnectionRef.current.close();
-      RTCConnectionRef.current = null;
-    }
+  const cleanupConnections = () => {
+    console.log('Cleaning up connections');
+    peersRef.current.forEach((peer) => {
+      peer.connection.onicecandidate = null; // Remove listener
+      peer.connection.close(); // Close connection
+      peer.videoRef.current?.remove();
+    });
+    peersRef.current.clear();
+    setPeers([]);
 
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach((track) => track.stop());
+    }
+  };
+
+  const leaveRoom = () => {
+    socketRef.current?.emit('leave', roomName);
+    cleanupConnections();
     navigate({ to: '/', replace: true });
   };
 
   return {
     localVideoRef,
-    remoteVideoRef,
+    peerVideoRefs: peers.map((peer) => peer.videoRef),
     toggleMic,
     toggleCamera,
     micActive,
     cameraActive,
     leaveRoom,
+    peers,
   };
 };
 
