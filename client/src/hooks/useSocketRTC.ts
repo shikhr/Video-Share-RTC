@@ -5,11 +5,12 @@ import { useNavigate } from '@tanstack/react-router';
 
 interface PeerConnection {
   id: string;
+  username: string;
   connection: RTCPeerConnection;
   videoRef: React.RefObject<HTMLVideoElement>;
 }
 
-const UseSocketRTC = (roomName: string) => {
+const UseSocketRTC = (roomName: string, username: string) => {
   const navigate = useNavigate();
 
   const [micActive, setMicActive] = useState(true);
@@ -40,7 +41,7 @@ const UseSocketRTC = (roomName: string) => {
 
       socketRef.current.on('connect', () => {
         console.log('Socket connected');
-        socketRef.current?.emit('join', roomName);
+        socketRef.current?.emit('join', roomName, username);
       });
 
       socketRef.current.on('joined', handleRoomJoined);
@@ -57,9 +58,8 @@ const UseSocketRTC = (roomName: string) => {
     initSocket();
     return () => {
       cleanupConnections();
-      socketRef.current?.disconnect();
     };
-  }, [roomName]);
+  }, [roomName, username]);
 
   const handleRoomCreated = async () => {
     isHostRef.current = true;
@@ -102,7 +102,7 @@ const UseSocketRTC = (roomName: string) => {
                 .then(() => {
                   resolve(true);
                 })
-                .catch((err) => {
+                .catch(() => {
                   resolve(false);
                 });
             };
@@ -122,19 +122,20 @@ const UseSocketRTC = (roomName: string) => {
     navigate({ to: '/', replace: true });
   };
 
-  const handlePeerList = async (peerIds: string[]) => {
-    console.log('Peer list:', peerIds);
+  const handlePeerList = async (
+    peerInfo: { id: string; username: string }[]
+  ) => {
+    console.log('Peer list:', peerInfo);
 
     // First ensure we have local stream
     if (!localStreamRef.current) {
       await setupLocalStream();
     }
 
-    // Only proceed if we have the stream
     if (localStreamRef.current) {
-      for (const peerId of peerIds) {
-        if (!peersRef.current.has(peerId)) {
-          await makeOffer(peerId);
+      for (const peer of peerInfo) {
+        if (!peersRef.current.has(peer.id)) {
+          await makeOffer(peer.id, peer.username);
         }
       }
     } else {
@@ -142,14 +143,15 @@ const UseSocketRTC = (roomName: string) => {
     }
   };
 
-  const handlePeerJoined = async (peerId: string) => {
-    console.log('Peer joined:', peerId);
+  const handlePeerJoined = async (peerId: string, peerUsername: string) => {
+    console.log('Peer joined:', peerId, peerUsername);
     if (!peersRef.current.has(peerId)) {
       // await createPeerConnection(peerId);
     }
   };
 
   const handlePeerLeft = (peerId: string) => {
+    console.log('Peer left:', peerId);
     const peerConnection = peersRef.current.get(peerId);
     if (peerConnection) {
       peerConnection.connection.close();
@@ -160,7 +162,7 @@ const UseSocketRTC = (roomName: string) => {
     }
   };
 
-  const createPeerConnection = async (peerId: string) => {
+  const createPeerConnection = async (peerId: string, peerUsername: string) => {
     if (!localStreamRef.current) {
       throw new Error('wee Cannot create peer connection without local stream');
     }
@@ -212,6 +214,7 @@ const UseSocketRTC = (roomName: string) => {
 
     const peerConnection: PeerConnection = {
       id: peerId,
+      username: peerUsername,
       connection: newPC,
       videoRef,
     };
@@ -219,8 +222,8 @@ const UseSocketRTC = (roomName: string) => {
     return peerConnection;
   };
 
-  const makeOffer = async (peerId: string) => {
-    const peerConnection = await createPeerConnection(peerId);
+  const makeOffer = async (peerId: string, peerUsername: string) => {
+    const peerConnection = await createPeerConnection(peerId, peerUsername);
     peersRef.current.set(peerId, peerConnection);
     setPeers(Array.from(peersRef.current.values()));
 
@@ -236,7 +239,8 @@ const UseSocketRTC = (roomName: string) => {
 
   const handleOffer = async (
     offer: RTCSessionDescriptionInit,
-    senderId: string
+    senderId: string,
+    senderUsername: string
   ) => {
     console.log('Received offer from:', senderId);
 
@@ -245,7 +249,7 @@ const UseSocketRTC = (roomName: string) => {
       return;
     }
 
-    const peerConnection = await createPeerConnection(senderId);
+    const peerConnection = await createPeerConnection(senderId, senderUsername);
     peersRef.current.set(senderId, peerConnection);
     setPeers(Array.from(peersRef.current.values()));
 
@@ -332,17 +336,42 @@ const UseSocketRTC = (roomName: string) => {
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((track) => track.stop());
     }
+    if (socketRef.current?.connected) {
+      socketRef.current.emit('leave', roomName);
+    }
+
+    if (socketRef.current) {
+      const socket = socketRef.current;
+
+      // Remove all listeners
+      socket.off('joined');
+      socket.off('created');
+      socket.off('full');
+      socket.off('peer-list');
+      socket.off('peer-joined');
+      socket.off('peer-left');
+      socket.off('offer');
+      socket.off('answer');
+      socket.off('ice-candidate');
+      socket.off('reconnect');
+
+      socket.disconnect();
+      socketRef.current = null;
+    }
   };
 
   const leaveRoom = () => {
-    socketRef.current?.emit('leave', roomName);
     cleanupConnections();
     navigate({ to: '/', replace: true });
   };
 
   return {
     localVideoRef,
-    peerVideoRefs: peers.map((peer) => peer.videoRef),
+    peerVideoRefs: peers.map((peer) => ({
+      ref: peer.videoRef,
+      username: peer.username,
+    })),
+
     toggleMic,
     toggleCamera,
     micActive,

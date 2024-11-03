@@ -1,5 +1,6 @@
 import { createLazyFileRoute, useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
+import { generateUsername } from 'unique-username-generator';
 
 export const Route = createLazyFileRoute('/')({
   component: Index,
@@ -9,11 +10,16 @@ function Index() {
   const navigate = useNavigate({ from: '/' });
 
   const [roomId, setRoomId] = useState<string>('');
+  const [username, setUsername] = useState<string>(generateUsername());
 
   const joinRoom = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!roomId) return;
-    navigate({ to: '/room/$id', params: { id: roomId } });
+    if (!roomId || !username) return;
+    navigate({
+      to: '/room/$id',
+      params: { id: roomId },
+      search: { username: username },
+    });
   };
 
   return (
@@ -31,6 +37,19 @@ function Index() {
               type="text"
               id="roomid"
               onChange={(e) => setRoomId(e.target.value)}
+              className="mt-1 block w-full px-3 py-2 text-xl bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-lg"
+            />
+            <label
+              htmlFor="username"
+              className="block text-xl font-medium text-gray-100"
+            >
+              Enter your name
+            </label>
+            <input
+              type="text"
+              id="username"
+              onChange={(e) => setUsername(e.target.value)}
+              value={username}
               className="mt-1 block w-full px-3 py-2 text-xl bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-lg"
             />
           </div>

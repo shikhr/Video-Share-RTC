@@ -9,6 +9,9 @@ export const Route = createFileRoute('/room/$id')({
 
 function RoomPage() {
   const { id } = Route.useParams();
+  const searchParams = Route.useSearch<{ username: string }>();
+  const { username } = searchParams;
+
   const {
     localVideoRef,
     peerVideoRefs,
@@ -18,42 +21,41 @@ function RoomPage() {
     cameraActive,
     leaveRoom,
     peers,
-  } = UseSocketRTC(id);
+  } = UseSocketRTC(id, username);
 
   return (
     <div className="text-white w-full min-h-screen flex flex-col justify-center items-center p-4">
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-4 w-full max-w-6xl">
         {/* Local Video */}
         <div className="aspect-video bg-gray-800 rounded-lg overflow-hidden">
+          <h3>{username}</h3>
           <video
             ref={localVideoRef}
             autoPlay
             playsInline
             muted
-            className="w-full h-full object-cover"
+            className="w-full h-full object-cover rounded-md"
           />
-          <div className="absolute top-2 left-2 bg-black/50 text-white px-2 py-1 rounded">
-            You
-          </div>
         </div>
 
         {/* Remote Peer Videos */}
-        {peerVideoRefs.map((videoRef, index) => (
+        {peerVideoRefs.map(({ ref, username: peerUsername }, idx) => (
           <div
-            key={peers[index]?.id || `peer-${index}`}
+            key={peers[idx]?.id || `peer-${idx}`}
             className="aspect-video bg-gray-800 rounded-lg overflow-hidden"
           >
+            <h3>{peerUsername}</h3>
             <video
-              ref={videoRef}
+              ref={ref}
               autoPlay
               playsInline
-              className="w-full h-full object-cover"
+              className="w-full h-full object-cover rounded-md"
             />
-            <div className="absolute top-2 left-2 bg-black/50 text-white px-2 py-1 rounded">
-              Joined {index + 2}
-            </div>
           </div>
         ))}
+        <div className="absolute top-2 left-2 bg-black/50 text-white px-2 py-1 rounded">
+          Joined {peerVideoRefs.length + 1}
+        </div>
 
         {/*  */}
       </div>

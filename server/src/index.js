@@ -30,52 +30,104 @@ const server = http.createServer(app, {
 const io = new Server(server);
 const port = process.env.PORT || 4000;
 
+const MAX_ROOM_PARTICIPANTS = 4; // Adjust as needed
+const connectedUsers = new Map(); // Store username by socket ID
+
 io.on('connection', (socket) => {
-  // console.log(`User Connected :${socket.id}`);
+  socket.on('join', (roomName, username) => {
+    const roomClients = io.sockets.adapter.rooms.get(roomName);
 
-  socket.on('join', (roomName) => {
-    const { rooms } = io.sockets.adapter;
-
-    const room = rooms.get(roomName);
-
-    if (room == undefined) {
-      socket.join(roomName);
-      socket.emit('created', roomName);
-    } else if (room.size == 1) {
-      socket.join(roomName);
-      socket.emit('joined', roomName);
-    } else {
+    // Check room capacity
+    if (roomClients && roomClients.size >= MAX_ROOM_PARTICIPANTS) {
       socket.emit('full', roomName);
+      return;
     }
-    // console.log('rooms', rooms);
+
+    connectedUsers.set(socket.id, username);
+
+    // Join room
+    socket.join(roomName);
+
+    // First client creates the room
+    if (!roomClients || roomClients.size === 1) {
+      socket.emit('created', roomName);
+    }
+    // Subsequent clients get joined status and peer list
+    else {
+      socket.emit('joined', roomName);
+
+      // Send list of existing peer IDs and usernames to the new participant
+      const peerInfo = Array.from(roomClients)
+        .filter((id) => id !== socket.id)
+        .map((id) => ({
+          id,
+          username: connectedUsers.get(id),
+        }));
+      socket.emit('peer-list', peerInfo);
+
+      // Notify other participants about the new peer
+      socket.to(roomName).emit('peer-joined', socket.id, username);
+    }
+
+    console.log(
+      `Socket ${
+        socket.id
+      } (${username}) joined room ${roomName}. Current participants: ${
+        roomClients?.size || 1
+      }`
+    );
   });
 
-  socket.on('ready', (roomName) => {
-    // console.log('ready');
-    socket.broadcast.to(roomName).emit('ready');
+  // Signaling methods for WebRTC connection establishment
+  socket.on('offer', (offer, roomName, targetPeerId) => {
+    if (targetPeerId) {
+      // Send offer to a specific peer
+      socket
+        .to(targetPeerId)
+        .emit('offer', offer, socket.id, connectedUsers.get(socket.id));
+    } else {
+      // Broadcast offer to all other peers in the room
+      socket.broadcast
+        .to(roomName)
+        .emit('offer', offer, socket.id, connectedUsers.get(socket.id));
+    }
   });
 
-  socket.on('offer', (offer, roomName) => {
-    // console.log('offer');
-    socket.broadcast.to(roomName).emit('offer', offer);
+  socket.on('answer', (answer, roomName, targetPeerId) => {
+    if (targetPeerId) {
+      // Send answer to a specific peer
+      socket.to(targetPeerId).emit('answer', answer, socket.id);
+    } else {
+      // Broadcast answer to all other peers in the room
+      socket.broadcast.to(roomName).emit('answer', answer, socket.id);
+    }
   });
 
-  socket.on('answer', (answer, roomName) => {
-    socket.broadcast.to(roomName).emit('answer', answer);
-  });
-
-  socket.on('ice-candidate', (candidate, roomName) => {
-    // console.log('candidate', candidate);
-    socket.broadcast.to(roomName).emit('ice-candidate', candidate);
+  socket.on('ice-candidate', (candidate, roomName, targetPeerId) => {
+    if (targetPeerId) {
+      // Send ICE candidate to a specific peer
+      socket.to(targetPeerId).emit('ice-candidate', candidate, socket.id);
+    } else {
+      // Broadcast ICE candidate to all other peers in the room
+      socket.broadcast.to(roomName).emit('ice-candidate', candidate, socket.id);
+    }
   });
 
   socket.on('leave', (roomName) => {
-    socket.broadcast.to(roomName).emit('leave');
+    // Notify other participants about the peer leaving
+    socket.broadcast.to(roomName).emit('peer-left', socket.id);
     socket.leave(roomName);
   });
 
-  socket.on('disconnect', (socket) => {
-    // console.log('Disconnected');
+  socket.on('disconnect', () => {
+    // Find and clean up all rooms this socket was part of
+    connectedUsers.delete(socket.id);
+    socket.rooms.forEach((roomName) => {
+      if (roomName !== socket.id) {
+        console.log(`Socket ${socket.id} left room ${roomName}`);
+        socket.broadcast.to(roomName).emit('peer-left', socket.id);
+      }
+    });
   });
 });
 
